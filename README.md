@@ -164,3 +164,9 @@ PromptCheck has its own test suite (no API calls needed):
 pip install -e ".[dev]"
 pytest
 ```
+
+---
+
+## License
+
+MIT — free to use, change, and build on. See [LICENSE](LICENSE).

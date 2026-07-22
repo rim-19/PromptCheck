@@ -3,6 +3,7 @@ name = "promptcheck"
 version = "0.1.0"
 description = "Regression monitoring for AI prompts — write test cases, run them against any model, catch drift before your users do."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "typer>=0.12",
