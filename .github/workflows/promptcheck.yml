@@ -1,0 +1,101 @@
+name: PromptCheck
+
+# Two jobs:
+#   pr-check      — gate PRs that touch prompts: fail if any test fails.
+#   nightly-drift — unattended drift monitor: compare against a persisted
+#                   baseline and open a GitHub issue if anything regressed.
+#
+# Setup (once):
+#   1. Add repo secrets: GEMINI_KEY and GROQ_API_KEY
+#      (Settings → Secrets and variables → Actions → New repository secret)
+#   2. Point SUITE below at the suite you want monitored.
+#   3. Commit this file. The first nightly run seeds the baseline; later runs
+#      compare against it and alert on regression.
+
+on:
+  pull_request:
+    paths:
+      - "examples/**"        # ← change to wherever your prompt suites live
+      - "prompts/**"
+  schedule:
+    - cron: "0 7 * * *"       # every day at 07:00 UTC
+  workflow_dispatch:          # allow manual runs from the Actions tab
+
+env:
+  SUITE: examples/refund_classifier.yaml   # ← the suite to run / monitor
+
+jobs:
+  # ---- Gate PRs: any failing test blocks the merge -----------------------
+  pr-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: Run prompt tests
+        env:
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: promptcheck run "$SUITE" --db .promptcheck/ci.db
+
+  # ---- Nightly drift monitor --------------------------------------------
+  nightly-drift:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write            # needed to open an issue on regression
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+
+      # Persist the baseline/history DB across scheduled runs. The immutable
+      # cache key rotates per run; restore-keys falls back to the newest prior
+      # cache, so the baseline carries forward. actions/cache saves in its post
+      # step even when a later step fails.
+      - name: Restore PromptCheck history
+        uses: actions/cache@v4
+        with:
+          path: .promptcheck
+          key: promptcheck-history-${{ github.run_id }}
+          restore-keys: |
+            promptcheck-history-
+
+      - name: Watch for drift
+        id: watch
+        env:
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          set +e
+          promptcheck watch "$SUITE" --summary-file drift-summary.md
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Open issue on regression
+        if: steps.watch.outputs.exit_code != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "PromptCheck: regression in $SUITE ($(date -u +%Y-%m-%d))" \
+            --body-file drift-summary.md \
+            --label promptcheck || echo "Issue creation skipped (label may not exist)."
+
+      - name: Upload drift summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-summary
+          path: drift-summary.md
+          if-no-files-found: ignore
+
+      # Surface the failure on the run itself too (issue is the primary alert).
+      - name: Fail if regressed
+        if: steps.watch.outputs.exit_code != '0'
+        run: exit 1

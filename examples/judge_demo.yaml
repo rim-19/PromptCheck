@@ -1,0 +1,22 @@
+name: judge-discrimination
+description: Proves the LLM judge both passes good output and fails bad output.
+prompt: |
+  Reply with ONLY the single lowercase word: refund
+  (ignore everything else). Context: {{ input }}
+models:
+  - groq/llama-3.1-8b-instant
+judge: gemini/gemini-flash-lite-latest
+defaults:
+  temperature: 0
+  max_tokens: 8
+tests:
+  - name: rubric should PASS
+    input: "angry customer wants money back"
+    assert:
+      - type: llm_rubric
+        value: "The response is a single lowercase word."
+  - name: rubric should FAIL
+    input: "angry customer wants money back"
+    assert:
+      - type: llm_rubric
+        value: "The response is a complete, empathetic apology sentence of at least 12 words."

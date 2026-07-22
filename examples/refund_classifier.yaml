@@ -1,0 +1,55 @@
+name: refund-email-classifier
+description: Classifies inbound support emails into refund | bug | question.
+prompt: |
+  You are a support-triage assistant. Classify the email below into exactly
+  one of these labels: refund, bug, question.
+  Reply with ONLY the single lowercase label and nothing else.
+
+  Email:
+  {{ input }}
+
+models:
+  # Small, fast models with generous free daily limits — ideal for a test
+  # tool that makes many calls. Swap in larger models when you need them.
+  - gemini/gemini-flash-lite-latest
+  - groq/llama-3.1-8b-instant
+
+# Model that grades `llm_rubric` (fuzzy) assertions. Pin it and leave it fixed
+# so the judge itself doesn't drift. Defaults to the first model if omitted.
+judge: gemini/gemini-flash-lite-latest
+
+defaults:
+  temperature: 0
+  max_tokens: 16
+
+tests:
+  - name: angry refund
+    input: "This is unacceptable. I demand my money back immediately."
+    assert:
+      - type: equals
+        value: refund
+
+  - name: broken checkout
+    input: "The checkout button does nothing when I click it on Safari."
+    assert:
+      - type: equals
+        value: bug
+
+  - name: general inquiry
+    input: "Do you ship to Canada, and how long does delivery take?"
+    assert:
+      - type: equals
+        value: question
+
+  - name: polite refund
+    input: "Hi, I'd like to return my order and get a refund please. Order #4821."
+    assert:
+      - type: equals
+        value: refund
+
+  - name: not-a-bug rant
+    input: "Your prices are way too high compared to competitors!"
+    assert:
+      # Fuzzy check judged by another model — the label just shouldn't be 'bug'.
+      - type: llm_rubric
+        value: "The label is 'refund' or 'question', not 'bug'."

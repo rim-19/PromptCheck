@@ -1,0 +1,24 @@
+name: break-demo-good
+description: Minimal 2-test suite to demonstrate regression catching.
+prompt: |
+  Classify the email into exactly one of: refund, bug, question.
+  Reply with ONLY the single lowercase label.
+
+  Email:
+  {{ input }}
+models:
+  - groq/llama-3.1-8b-instant
+defaults:
+  temperature: 0
+  max_tokens: 8
+tests:
+  - name: refund
+    input: "I want my money back right now, this is unacceptable."
+    assert:
+      - type: equals
+        value: refund
+  - name: bug
+    input: "The checkout button does nothing when I click it."
+    assert:
+      - type: equals
+        value: bug
