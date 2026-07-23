@@ -28,6 +28,7 @@ from .report import (
     render_suite_run,
     render_summary,
     render_watch,
+    render_watch_verdict,
     watch_markdown,
 )
 from .runner import run_suite
@@ -178,50 +179,48 @@ def run(
 @app.command()
 def compare(
     target: str = typer.Argument(
-        ..., help="A single suite file to compare across its models."
+        ..., help="Suite file, directory, or glob to compare across models."
     ),
     concurrency: int = typer.Option(3, "--concurrency", "-c", min=1, max=20),
 ) -> None:
-    """Run one suite across all its models and show a side-by-side matrix,
+    """Run suites across all their models and show a side-by-side matrix,
     highlighting the tests where models disagree."""
+    suites = _load_many(target)
+    compared = 0
+    for suite in suites:
+        if len(suite.models) < 2:
+            console.print(
+                f"[dim]Skipping '{suite.name}' — compare needs 2+ models, "
+                f"it has {len(suite.models)}.[/]"
+            )
+            continue
+        suite_run = asyncio.run(run_suite(suite, concurrency=concurrency))
+        render_compare_matrix(suite_run)
+        compared += 1
+    if compared == 0:
+        console.print("[yellow]No suites with 2+ models to compare.[/]")
+        raise typer.Exit(1)
+
+
+def _load_many(target: str) -> list:
+    """Resolve a file, directory, or glob into a list of loaded suites.
+
+    Invalid suites are reported and skipped; exits if nothing loads.
+    """
     suite_files = discover_suites(target)
     if not suite_files:
         console.print(f"[red]No suite files (*.yaml) found at:[/] {target}")
         raise typer.Exit(1)
-    if len(suite_files) > 1:
-        console.print("[yellow]compare expects a single suite file.[/]")
+    suites = []
+    for f in suite_files:
+        try:
+            suites.append(load_suite(f))
+        except SuiteError as e:
+            console.print(f"[red]Skipping invalid suite[/] {f}:\n{e}")
+    if not suites:
+        console.print("[red]No valid suites to run.[/]")
         raise typer.Exit(1)
-
-    try:
-        suite = load_suite(suite_files[0])
-    except SuiteError as e:
-        console.print(f"[red]{e}[/]")
-        raise typer.Exit(1)
-    if len(suite.models) < 2:
-        console.print(
-            "[yellow]compare needs at least 2 models in the suite.[/] "
-            f"'{suite.name}' has {len(suite.models)}."
-        )
-        raise typer.Exit(1)
-
-    suite_run = asyncio.run(run_suite(suite, concurrency=concurrency))
-    render_compare_matrix(suite_run)
-
-
-def _load_single(target: str):
-    """Resolve a target to exactly one loaded suite, or exit."""
-    suite_files = discover_suites(target)
-    if not suite_files:
-        console.print(f"[red]No suite files (*.yaml) found at:[/] {target}")
-        raise typer.Exit(1)
-    if len(suite_files) > 1:
-        console.print("[yellow]This command expects a single suite file.[/]")
-        raise typer.Exit(1)
-    try:
-        return load_suite(suite_files[0])
-    except SuiteError as e:
-        console.print(f"[red]{e}[/]")
-        raise typer.Exit(1)
+    return suites
 
 
 baseline_app = typer.Typer(help="Manage drift baselines.", no_args_is_help=True)
@@ -230,61 +229,68 @@ app.add_typer(baseline_app, name="baseline")
 
 @baseline_app.command("set")
 def baseline_set(
-    target: str = typer.Argument(..., help="Suite file to baseline."),
+    target: str = typer.Argument(
+        ..., help="Suite file, directory, or glob to baseline."
+    ),
     concurrency: int = typer.Option(3, "--concurrency", "-c", min=1, max=20),
     db: Path = typer.Option(Path(".promptcheck/history.db"), "--db"),
 ) -> None:
-    """Run the suite now and pin the result as the baseline for each model."""
-    suite = _load_single(target)
-    suite_run = asyncio.run(run_suite(suite, concurrency=concurrency))
-    render_suite_run(suite_run)
+    """Run suites now and pin each result as the baseline for its models."""
+    suites = _load_many(target)
     conn = connect(db)
     try:
-        run_ids = save_run(conn, suite_run)
-        for mr, run_id in zip(suite_run.model_runs, run_ids):
-            store.set_baseline(conn, suite.name, mr.model_ref, run_id)
-            console.print(
-                f"[blue]baseline set[/] {suite.name} · {mr.model_ref} "
-                f"→ {mr.pass_count}/{mr.total} (run #{run_id})"
-            )
+        for suite in suites:
+            suite_run = asyncio.run(run_suite(suite, concurrency=concurrency))
+            render_suite_run(suite_run)
+            run_ids = save_run(conn, suite_run)
+            for mr, run_id in zip(suite_run.model_runs, run_ids):
+                store.set_baseline(conn, suite.name, mr.model_ref, run_id)
+                console.print(
+                    f"[blue]baseline set[/] {suite.name} · {mr.model_ref} "
+                    f"→ {mr.pass_count}/{mr.total} (run #{run_id})"
+                )
     finally:
         conn.close()
 
 
 @baseline_app.command("show")
 def baseline_show(
-    target: str = typer.Argument(..., help="Suite file."),
+    target: str = typer.Argument(..., help="Suite file, directory, or glob."),
     db: Path = typer.Option(Path(".promptcheck/history.db"), "--db"),
 ) -> None:
-    """Show the current baseline for each model in a suite."""
-    suite = _load_single(target)
+    """Show the current baseline for each model in each suite."""
+    suites = _load_many(target)
     conn = connect(db)
     try:
-        any_found = False
-        for model_ref in suite.models:
-            run_id = store.get_baseline_run_id(conn, suite.name, model_ref)
-            if run_id is None:
-                console.print(f"[dim]{model_ref}: no baseline[/]")
-                continue
-            any_found = True
-            run = store.get_run(conn, run_id)
-            console.print(
-                f"[blue]{model_ref}[/]: run #{run_id} · "
-                f"{run.pass_count}/{run.total_count} · {run.model_version} · "
-                f"{run.started_at[:19].replace('T', ' ')}"
-            )
-        if not any_found:
-            console.print(
-                f"[yellow]No baselines for '{suite.name}'.[/] "
-                f"Run: [bold]promptcheck baseline set {target}[/]"
-            )
+        for suite in suites:
+            console.print(f"\n[bold]{suite.name}[/]")
+            any_found = False
+            for model_ref in suite.models:
+                run_id = store.get_baseline_run_id(conn, suite.name, model_ref)
+                if run_id is None:
+                    console.print(f"  [dim]{model_ref}: no baseline[/]")
+                    continue
+                any_found = True
+                run = store.get_run(conn, run_id)
+                console.print(
+                    f"  [blue]{model_ref}[/]: run #{run_id} · "
+                    f"{run.pass_count}/{run.total_count} · {run.model_version} · "
+                    f"{run.started_at[:19].replace('T', ' ')}"
+                )
+            if not any_found:
+                console.print(
+                    f"  [yellow]No baselines yet.[/] Run: "
+                    f"[bold]promptcheck baseline set {target}[/]"
+                )
     finally:
         conn.close()
 
 
 @app.command()
 def watch(
-    target: str = typer.Argument(..., help="Suite file to check for drift."),
+    target: str = typer.Argument(
+        ..., help="Suite file, directory, or glob to check for drift."
+    ),
     concurrency: int = typer.Option(3, "--concurrency", "-c", min=1, max=20),
     db: Path = typer.Option(Path(".promptcheck/history.db"), "--db"),
     summary_file: Path = typer.Option(
@@ -293,25 +299,33 @@ def watch(
         help="Write a plain-markdown drift summary here (for CI / issue bodies).",
     ),
 ) -> None:
-    """Run the suite and compare against its baseline. Exits non-zero if any
+    """Run suites and compare each against its baseline. Exits non-zero if any
     test regressed (passed in the baseline, fails now). Seeds a baseline on
-    first run."""
-    suite = _load_single(target)
-    suite_run = asyncio.run(run_suite(suite, concurrency=concurrency))
+    first run. Accepts a file, a directory, or a glob."""
+    suites = _load_many(target)
+    all_clean = True
+    sections: list[str] = []
+
     conn = connect(db)
     try:
-        run_ids = save_run(conn, suite_run)
-        diffs = [
-            diff_against_baseline(conn, suite.name, mr, run_id)
-            for mr, run_id in zip(suite_run.model_runs, run_ids)
-        ]
+        for suite in suites:
+            suite_run = asyncio.run(run_suite(suite, concurrency=concurrency))
+            run_ids = save_run(conn, suite_run)
+            diffs = [
+                diff_against_baseline(conn, suite.name, mr, run_id)
+                for mr, run_id in zip(suite_run.model_runs, run_ids)
+            ]
+            if not render_watch(suite.name, diffs):
+                all_clean = False
+            sections.append(watch_markdown(suite.name, diffs))
     finally:
         conn.close()
-    clean = render_watch(diffs)
+
+    render_watch_verdict(all_clean, len(suites))
     if summary_file:
         summary_file.parent.mkdir(parents=True, exist_ok=True)
-        summary_file.write_text(watch_markdown(suite.name, diffs), encoding="utf-8")
-    raise typer.Exit(0 if clean else 1)
+        summary_file.write_text("\n\n---\n\n".join(sections), encoding="utf-8")
+    raise typer.Exit(0 if all_clean else 1)
 
 
 @app.command()
@@ -340,23 +354,24 @@ def serve(
 
 @app.command()
 def history(
-    target: str = typer.Argument(..., help="Suite file."),
+    target: str = typer.Argument(..., help="Suite file, directory, or glob."),
     limit: int = typer.Option(20, "--limit", "-n", help="Max runs per model."),
     db: Path = typer.Option(Path(".promptcheck/history.db"), "--db"),
 ) -> None:
-    """Show pass-rate history over time for each model in a suite."""
-    suite = _load_single(target)
+    """Show pass-rate history over time for each model in each suite."""
+    suites = _load_many(target)
     conn = connect(db)
     try:
-        models = suite.models or store.models_for_suite(conn, suite.name)
-        per_model = {}
-        for model_ref in models:
-            runs = store.list_runs(conn, suite.name, model_ref, limit=limit)
-            baseline_id = store.get_baseline_run_id(conn, suite.name, model_ref)
-            per_model[model_ref] = (runs, baseline_id)
+        for suite in suites:
+            models = suite.models or store.models_for_suite(conn, suite.name)
+            per_model = {}
+            for model_ref in models:
+                runs = store.list_runs(conn, suite.name, model_ref, limit=limit)
+                baseline_id = store.get_baseline_run_id(conn, suite.name, model_ref)
+                per_model[model_ref] = (runs, baseline_id)
+            render_history(suite.name, per_model)
     finally:
         conn.close()
-    render_history(suite.name, per_model)
 
 
 if __name__ == "__main__":

@@ -92,11 +92,14 @@ async def judge_rubric(
                 break
 
     if gen is None:
+        # The judge itself failed (rate limit, network). This is an
+        # infrastructure problem, not evidence the output is wrong.
         return AssertionResult(
             passed=False,
             reason=f"judge error: {last_err}",
             assertion=desc,
             judge_model=model,
+            errored=True,
         )
 
     passed, reason = _parse_verdict(gen.text)

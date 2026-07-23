@@ -141,10 +141,10 @@ def _sparkline(rates: list[float]) -> str:
     return "".join(out)
 
 
-def render_watch(diffs: list) -> bool:
-    """Render drift diffs. Returns True if clean (no regressions)."""
+def render_watch(suite_name: str, diffs: list) -> bool:
+    """Render one suite's drift diffs. Returns True if clean (no regressions)."""
     console.print()
-    console.rule("[bold cyan]watch · drift vs. baseline[/]")
+    console.rule(f"[bold cyan]watch · {suite_name}[/]")
     clean = True
 
     for d in diffs:
@@ -193,17 +193,34 @@ def render_watch(diffs: list) -> bool:
             for idx, label in d.improvements:
                 lines.append(f"  [green]✓[/] #{idx} {label}  (failed in baseline, passes now)")
 
+        if d.errored:
+            lines.append(
+                f"\n[yellow]Could not evaluate ({len(d.errored)}):[/] "
+                "[dim]API/judge error — not counted as regressions[/]"
+            )
+            for idx, label in d.errored:
+                lines.append(f"  [yellow]?[/] #{idx} {label}")
+
         border = "red" if d.regressions else ("yellow" if d.version_changed else "green")
         title = f"[bold]{model}[/] · " + (
             "[red]REGRESSED[/]" if d.regressions else "[green]OK[/]"
         )
         console.print(Panel("\n".join(lines), title=title, border_style=border))
 
-    if clean:
-        console.print("[green]✓ No regressions vs. baseline.[/]")
+    return clean
+
+
+def render_watch_verdict(all_clean: bool, suite_count: int) -> None:
+    """Overall verdict after every watched suite has been rendered."""
+    console.print()
+    plural = "suite" if suite_count == 1 else "suites"
+    if all_clean:
+        console.print(
+            f"[green]✓ No regressions vs. baseline "
+            f"({suite_count} {plural} checked).[/]"
+        )
     else:
         console.print("[bold red]✗ Regressions detected — see above.[/]")
-    return clean
 
 
 def watch_markdown(suite_name: str, diffs: list) -> str:
@@ -240,6 +257,13 @@ def watch_markdown(suite_name: str, diffs: list) -> str:
             lines.append("- Improvements:")
             for idx, label in d.improvements:
                 lines.append(f"  - ✓ #{idx} {label}")
+        if d.errored:
+            lines.append(
+                "- ❓ Could not evaluate (API/judge error — **not** counted as "
+                "regressions):"
+            )
+            for idx, label in d.errored:
+                lines.append(f"  - ? #{idx} {label}")
         lines.append("")
 
     header = []

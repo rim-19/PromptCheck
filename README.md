@@ -90,26 +90,34 @@ Check types you can use: `equals`, `contains`, `not_contains`, `regex`, and
 
 ## The commands
 
+Every command takes a single file, a **whole folder**, or a glob — so you can
+check one prompt or your entire prompt library in one go.
+
 ```bash
-promptcheck run <file>        # run the tests, see pass/fail
-promptcheck compare <file>    # run across all its models, side by side
-promptcheck baseline set <file>   # remember how things look right now
-promptcheck watch <file>      # re-run and compare to that baseline
-promptcheck history <file>    # pass rate over time (little trend chart)
-promptcheck serve             # open the web dashboard
+promptcheck run <file|folder>          # run the tests, see pass/fail
+promptcheck compare <file|folder>      # run across all its models, side by side
+promptcheck baseline set <file|folder> # remember how things look right now
+promptcheck watch <file|folder>        # re-run and compare to that baseline
+promptcheck history <file|folder>      # pass rate over time (little trend chart)
+promptcheck serve                      # open the web dashboard
 ```
 
 ### Catching drift (the main point)
 
 ```bash
-promptcheck baseline set examples/refund_classifier.yaml   # save today's behavior
-promptcheck watch examples/refund_classifier.yaml          # later: did anything break?
+promptcheck baseline set examples/   # save today's behavior for every prompt
+promptcheck watch examples/          # later: did anything break?
 ```
 
-`watch` only complains about real regressions — tests that used to pass and now
-fail. If the model's version changed too, it says so, so a sudden drop points
+`watch` only complains about **real** regressions — tests that used to pass and
+now fail. If the model's version changed too, it says so, so a sudden drop points
 straight at the cause. The first `watch` just remembers the current state as the
 baseline.
+
+One thing it deliberately does **not** do: if a test couldn't run at all because
+the API was rate-limited or the judge call failed, that is reported separately as
+"could not evaluate" — never as a regression. A failed network call tells you
+nothing about your prompt, and false alarms are how people learn to ignore alerts.
 
 ---
 

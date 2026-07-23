@@ -103,6 +103,7 @@ def save_run(conn: sqlite3.Connection, suite_run: SuiteRun) -> list[int]:
                                 "passed": a.passed,
                                 "reason": a.reason,
                                 "judge_model": a.judge_model,
+                                "errored": a.errored,
                             }
                             for a in r.assertion_results
                         ]
@@ -161,16 +162,31 @@ def list_runs(
 
 
 def run_test_status(conn: sqlite3.Connection, run_id: int) -> dict[int, dict]:
-    """Return {test_index: {passed, label, output, error}} for a stored run."""
+    """Return {test_index: {passed, label, output, error, errored}} for a run.
+
+    `errored` is True when the result couldn't be evaluated at all — either the
+    model call failed or a judged assertion failed to get a verdict.
+    """
     rows = conn.execute(
-        "SELECT test_index, test_label, passed, output, error FROM results "
-        "WHERE run_id=?",
+        "SELECT test_index, test_label, passed, output, error, assertions_json "
+        "FROM results WHERE run_id=?",
         (run_id,),
     ).fetchall()
-    return {
-        idx: {"passed": bool(p), "label": label, "output": out, "error": err}
-        for idx, label, p, out, err in rows
-    }
+    out_map = {}
+    for idx, label, p, out, err, aj in rows:
+        try:
+            assertions = json.loads(aj or "[]")
+        except json.JSONDecodeError:
+            assertions = []
+        judge_errored = any(a.get("errored") for a in assertions)
+        out_map[idx] = {
+            "passed": bool(p),
+            "label": label,
+            "output": out,
+            "error": err,
+            "errored": bool(err) or judge_errored,
+        }
+    return out_map
 
 
 def models_for_suite(conn: sqlite3.Connection, suite_name: str) -> list[str]:

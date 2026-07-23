@@ -100,6 +100,45 @@ def test_drift_detects_improvement_not_regression(conn):
     assert [idx for idx, _ in d.improvements] == [1]
 
 
+def test_api_error_is_not_counted_as_regression(conn):
+    """A rate-limit/API error must never be reported as a regression — it proves
+    nothing about the prompt and would cry wolf in CI."""
+    base = _suite_run([True, True])
+    base_id = store.save_run(conn, base)[0]
+    store.set_baseline(conn, "s", MODEL, base_id)
+
+    now = _suite_run([True, True])
+    broken = now.model_runs[0].results[1]
+    broken.passed = False
+    broken.output = ""
+    broken.assertion_results = []
+    broken.error = "groq returned 429: rate limit"
+    now_id = store.save_run(conn, now)[0]
+
+    d = diff_against_baseline(conn, "s", now.model_runs[0], now_id)
+    assert d.has_regression is False
+    assert [idx for idx, _ in d.errored] == [1]
+
+
+def test_judge_error_is_not_counted_as_regression(conn):
+    """Same, when the *judge* call fails but the model answered fine."""
+    base = _suite_run([True, True])
+    base_id = store.save_run(conn, base)[0]
+    store.set_baseline(conn, "s", MODEL, base_id)
+
+    now = _suite_run([True, True])
+    r = now.model_runs[0].results[1]
+    r.passed = False  # judge returned no verdict, so the test "failed"
+    r.assertion_results = [
+        AssertionResult(False, "judge error: 429", "llm_rubric('x')", errored=True)
+    ]
+    now_id = store.save_run(conn, now)[0]
+
+    d = diff_against_baseline(conn, "s", now.model_runs[0], now_id)
+    assert d.has_regression is False
+    assert [idx for idx, _ in d.errored] == [1]
+
+
 def test_drift_flags_version_change(conn):
     base = _suite_run([True, True], version="v1")
     base_id = store.save_run(conn, base)[0]

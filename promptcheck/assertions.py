@@ -15,6 +15,9 @@ class AssertionResult:
     reason: str
     assertion: str  # describe() of the source assertion
     judge_model: str | None = None  # judge version, for model-judged assertions
+    # True when the assertion couldn't be evaluated at all (e.g. the judge call
+    # failed). Distinct from a genuine failed check — see drift.py.
+    errored: bool = False
 
 
 def evaluate(assertion: Assertion, output: str) -> AssertionResult:

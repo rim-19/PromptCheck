@@ -26,6 +26,10 @@ class ModelDiff:
     current_version: str
     regressions: list[tuple[int, str]] = field(default_factory=list)  # (idx, label)
     improvements: list[tuple[int, str]] = field(default_factory=list)
+    # Tests that couldn't be evaluated (API error / rate limit) in either run.
+    # These are NOT regressions — a failed API call proves nothing about the
+    # prompt, and treating it as a regression would cry wolf in CI.
+    errored: list[tuple[int, str]] = field(default_factory=list)
 
     @property
     def version_changed(self) -> bool:
@@ -71,10 +75,17 @@ def diff_against_baseline(
 
     regressions: list[tuple[int, str]] = []
     improvements: list[tuple[int, str]] = []
+    errored: list[tuple[int, str]] = []
     for r in model_run.results:
         base = base_status.get(r.test_index)
         if base is None:
             continue  # test didn't exist in baseline; ignore for drift
+        # If either side failed to produce a verdict (rate limit, API error),
+        # we can't compare them — report it, but never call it a regression.
+        cur_errored = bool(r.error) or any(a.errored for a in r.assertion_results)
+        if cur_errored or base.get("errored"):
+            errored.append((r.test_index, r.test_label))
+            continue
         was = base["passed"]
         now = r.passed
         if was and not now:
@@ -92,4 +103,5 @@ def diff_against_baseline(
         current_version=current_version,
         regressions=regressions,
         improvements=improvements,
+        errored=errored,
     )
