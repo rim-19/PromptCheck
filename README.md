@@ -40,9 +40,9 @@ You'll need **Python 3.11+** and at least one free API key.
 
 ```bash
 # 1. install
-python -m venv .venv
-.venv\Scripts\activate          # Windows  (use: source .venv/bin/activate on Mac/Linux)
-pip install -e .
+pip install promptcheck-drift        # from PyPI
+# or, to hack on it from a clone:
+#   python -m venv .venv && .venv\Scripts\activate && pip install -e .
 
 # 2. add a key
 #    copy .env.example to .env and paste in a free key:
